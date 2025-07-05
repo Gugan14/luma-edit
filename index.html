@@ -1,1 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LumaEdit - Professional Web Photo Editor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="loader-overlay" class="hidden">
+        <div class="loader-spinner"></div>
+        <p id="loader-text">Loading Model...</p>
+    </div>
 
+    <div class="app-container">
+        <header class="top-bar">
+            <h1>LumaEdit</h1>
+            <div id="crop-controls" class="hidden">
+                <button id="applyCropButton">Apply</button>
+                <button id="cancelCropButton">Cancel</button>
+            </div>
+            <div class="io-buttons">
+                <input type="file" id="imageLoader" accept="image/*" style="display: none;"/>
+                <input type="file" id="presetLoader" accept=".luma" style="display: none;"/>
+                <button id="loadButton">Load Image</button>
+                <button id="loadPresetButton">Load Preset</button>
+                <button id="savePresetButton">Save Preset</button>
+                <button id="saveButton">Save Image</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <aside class="left-panel">
+                <div class="panel-section">
+                    <h3>History</h3>
+                    <div class="history-controls">
+                        <button id="undoButton">Undo</button>
+                        <button id="redoButton">Redo</button>
+                    </div>
+                    <ul id="historyList"></ul>
+                </div>
+            </aside>
+
+            <div class="image-viewer">
+                <canvas id="canvas"></canvas>
+            </div>
+
+            <aside class="right-panel">
+                 <div class="panel-group">
+                    <h3>Transform</h3>
+                    <div class="transform-tools">
+                        <button id="cropButton" class="tool-button">Crop</button>
+                        <button id="rotateLeftButton" class="tool-button">Rotate L</button>
+                        <button id="rotateRightButton" class="tool-button">Rotate R</button>
+                        <button id="flipHorizontalButton" class="tool-button">Flip H</button>
+                        <button id="flipVerticalButton" class="tool-button">Flip V</button>
+                    </div>
+                </div>
+
+                <div class="panel-group" id="global-edit-panel">
+                    <h3>Light</h3>
+                    <div class="panel-section">
+                        <div id="toneCurveContainer"></div>
+                        <div class="slider-group">
+                            <label for="exposure">Exposure</label>
+                            <input type="range" id="exposure" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="contrast">Contrast</label>
+                            <input type="range" id="contrast" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="highlights">Highlights</label>
+                            <input type="range" id="highlights" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="shadows">Shadows</label>
+                            <input type="range" id="shadows" class="slider" min="-100" max="100" value="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-group">
+                    <h3>Color</h3>
+                     <div class="panel-section">
+                        <h4>White Balance</h4>
+                        <div class="slider-group">
+                            <label for="temperature">Temperature</label>
+                            <input type="range" id="temperature" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="saturation">Saturation</label>
+                            <input type="range" id="saturation" class="slider" min="-100" max="100" value="0">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="panel-group">
+                    <h3>Color Grading</h3>
+                    <div class="panel-section">
+                        <h4>Shadows</h4>
+                        <div class="slider-group">
+                            <label for="shadowsHue">Hue</label>
+                            <input type="range" id="shadowsHue" class="slider hue-slider" min="0" max="360" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="shadowsSaturation">Saturation</label>
+                            <input type="range" id="shadowsSaturation" class="slider" min="0" max="100" value="0">
+                        </div>
+                    </div>
+                     <div class="panel-section">
+                        <h4>Midtones</h4>
+                        <div class="slider-group">
+                            <label for="midtonesHue">Hue</label>
+                            <input type="range" id="midtonesHue" class="slider hue-slider" min="0" max="360" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="midtonesSaturation">Saturation</label>
+                            <input type="range" id="midtonesSaturation" class="slider" min="0" max="100" value="0">
+                        </div>
+                    </div>
+                     <div class="panel-section">
+                        <h4>Highlights</h4>
+                        <div class="slider-group">
+                            <label for="highlightsHue">Hue</label>
+                            <input type="range" id="highlightsHue" class="slider hue-slider" min="0" max="360" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="highlightsSaturation">Saturation</label>
+                            <input type="range" id="highlightsSaturation" class="slider" min="0" max="100" value="0">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="panel-group">
+                    <h3>Effects</h3>
+                    <div class="panel-section">
+                        <div class="slider-group">
+                            <label for="texture">Texture</label>
+                            <input type="range" id="texture" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="clarity">Clarity</label>
+                            <input type="range" id="clarity" class="slider" min="-100" max="100" value="0">
+                        </div>
+                        <div class="slider-group">
+                            <label for="dehaze">Dehaze</label>
+                            <input type="range" id="dehaze" class="slider" min="-100" max="100" value="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-group">
+                    <h3>Masking</h3>
+                    <div id="mask-tools">
+                        <button id="selectSubjectButton">Select Subject</button>
+                        <button id="radialMaskButton">New Radial Mask</button>
+                    </div>
+                    <ul id="maskList"></ul>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="showMaskOverlay" checked>
+                        <label for="showMaskOverlay">Show Mask Overlay</label>
+                    </div>
+                </div>
+
+                <div class="panel-group hidden" id="mask-edit-panel">
+                    <h3 id="mask-edit-title">Mask Adjustments</h3>
+                     <div class="panel-section">
+                        <!-- Simplified Mask Panel for brevity -->
+                        <div class="slider-group"><label for="mask-exposure">Exposure</label><input type="range" id="mask-exposure" class="slider" min="-100" max="100" value="0"></div>
+                        <div class="slider-group"><label for="mask-contrast">Contrast</label><input type="range" id="mask-contrast" class="slider" min="-100" max="100" value="0"></div>
+                        <div class="slider-group"><label for="mask-highlights">Highlights</label><input type="range" id="mask-highlights" class="slider" min="-100" max="100" value="0"></div>
+                        <div class="slider-group"><label for="mask-shadows">Shadows</label><input type="range" id="mask-shadows" class="slider" min="-100" max="100" value="0"></div>
+                        <div class="slider-group"><label for="mask-temperature">Temperature</label><input type="range" id="mask-temperature" class="slider" min="-100" max="100" value="0"></div>
+                        <div class="slider-group"><label for="mask-saturation">Saturation</label><input type="range" id="mask-saturation" class="slider" min="-100" max="100" value="0"></div>
+                    </div>
+                    <button id="deleteMaskButton">Delete Mask</button>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0/dist/body-pix.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
