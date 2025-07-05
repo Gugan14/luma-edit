@@ -1,8 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- DOM Elements ---
+    // =================================================================================
+    // 1. DOM Element References
+    // =================================================================================
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    // A single object for cleaner access to all DOM elements
+
     const dom = {
         imageLoader: document.getElementById('imageLoader'),
         loadButton: document.getElementById('loadButton'),
@@ -35,10 +37,13 @@ document.addEventListener('DOMContentLoaded', () => {
         allSliders: document.querySelectorAll('.slider')
     };
 
-    // --- State Management ---
+    // =================================================================================
+    // 2. State Management Variables
+    // =================================================================================
     let originalImage = null, originalImageData = null, historyStack = [], historyIndex = -1;
-    let currentTool = null, isDragging = false, dragHandle = null;
-    let radialMaskParams = {}, cropBox = {}, bodyPixModel = null, toneCurve, blurredDataCache = null;
+    let currentTool = null, isDragging = false, dragHandle = null, dragStart = {};
+    let radialMaskParams = {}, cropBox = {}, bodyPixModel = null, toneCurve;
+    let blurredDataCache = { id: null, data: null }; // Cache for clarity/texture blur
 
     const getEmptyEdits = () => ({
         exposure: 0, contrast: 0, highlights: 0, shadows: 0,
@@ -48,22 +53,26 @@ document.addEventListener('DOMContentLoaded', () => {
         toneCurvePoints: [{x: 0, y: 255}, {x: 255, y: 0}]
     });
 
-    // --- Tone Curve Class (Self-Contained & Correct) ---
+    // =================================================================================
+    // 3. Tone Curve Class (Self-Contained Module)
+    // =================================================================================
     class ToneCurve {
         constructor(containerId,onChange){this.container=document.getElementById(containerId);this.onChange=onChange;this.points=[{x:0,y:255},{x:255,y:0}];this.lut=null;this.draggingPoint=null;this.init();}
-        init(){this.canvas=document.createElement('canvas');this.canvas.id='toneCurveCanvas';this.canvas.width=256;this.canvas.height=256;this.ctx=this.canvas.getContext('2d');const r=document.createElement('button');r.id='resetCurveButton';r.innerText='Reset';r.onclick=()=>{this.setPoints([{x:0,y:255},{x:255,y:0}]);this.onChange();};this.container.innerHTML='';this.container.appendChild(this.canvas);this.container.appendChild(r);this.canvas.addEventListener('mousedown',this.onMouseDown.bind(this));this.canvas.addEventListener('mousemove',this.onMouseMove.bind(this));this.canvas.addEventListener('mouseup',this.onMouseUp.bind(this));this.canvas.addEventListener('mouseleave',this.onMouseUp.bind(this));this.draw();this.generateLUT();}
+        init(){this.canvas=document.createElement('canvas');this.canvas.id='toneCurveCanvas';this.canvas.width=256;this.canvas.height=256;this.ctx=this.canvas.getContext('2d');const r=document.createElement('button');r.id='resetCurveButton';r.innerText='Reset';r.onclick=()=>{this.setPoints([{x:0,y:255},{x:255,y:0}]);this.onChange(true);};this.container.innerHTML='';this.container.appendChild(this.canvas);this.container.appendChild(r);this.canvas.addEventListener('mousedown',this.onMouseDown.bind(this));this.canvas.addEventListener('mousemove',this.onMouseMove.bind(this));this.canvas.addEventListener('mouseup',this.onMouseUp.bind(this));this.canvas.addEventListener('mouseleave',this.onMouseUp.bind(this));this.draw();this.generateLUT();}
         setPoints(p){this.points=JSON.parse(JSON.stringify(p)).sort((a,b)=>a.x-b.x);this.draw();this.generateLUT();}
         draw(){this.ctx.fillStyle='#2c2c2c';this.ctx.fillRect(0,0,256,256);this.ctx.strokeStyle='#444';this.ctx.lineWidth=0.5;this.ctx.beginPath();[64,128,192].forEach(p=>{this.ctx.moveTo(p,0);this.ctx.lineTo(p,256);this.ctx.moveTo(0,p);this.ctx.lineTo(256,p);});this.ctx.stroke();this.ctx.strokeStyle='#e0e0e0';this.ctx.lineWidth=2;this.ctx.beginPath();this.ctx.moveTo(this.points[0].x,this.points[0].y);for(let i=1;i<this.points.length;i++){this.ctx.lineTo(this.points[i].x,this.points[i].y);}this.ctx.stroke();this.ctx.fillStyle='#00aeff';this.points.forEach(p=>{this.ctx.beginPath();this.ctx.arc(p.x,p.y,4,0,2*Math.PI);this.ctx.fill();});}
         generateLUT(){this.lut=new Uint8ClampedArray(256);for(let i=0;i<256;i++){let p1_idx=0;while(p1_idx<this.points.length-2&&this.points[p1_idx+1].x<i){p1_idx++;}const p1=this.points[p1_idx];const p2=this.points[p1_idx+1];const t=(p1.x===p2.x)?0:(i-p1.x)/(p2.x-p1.x);const y=255-(p1.y+t*(p2.y-p1.y));this.lut[i]=Math.max(0,Math.min(255,y));}}
-        onMouseDown(e){const x=e.offsetX;const y=e.offsetY;let f=null;for(const p of this.points){if(Math.abs(p.x-x)<8&&Math.abs(p.y-y)<8){f=p;break;}}if(f&&e.ctrlKey&&this.points.length>2&&(f.x!==0&&f.x!==255)){this.points=this.points.filter(p=>p!==f);this.draggingPoint=null;this.draw();this.generateLUT();this.onChange();}else if(f){this.draggingPoint=f;}else{const nP={x,y};this.points.push(nP);this.points.sort((a,b)=>a.x-b.x);this.draggingPoint=nP;}this.draw();}
-        onMouseMove(e){if(!this.draggingPoint)return;if(this.draggingPoint.x!==0&&this.draggingPoint.x!==255){this.draggingPoint.x=Math.max(1,Math.min(254,e.offsetX));}this.draggingPoint.y=Math.max(0,Math.min(255,e.offsetY));this.points.sort((a,b)=>a.x-b.x);this.draw();}
-        onMouseUp(){if(this.draggingPoint){this.draggingPoint=null;this.generateLUT();this.onChange();}}
+        onMouseDown(e){const x=e.offsetX;const y=e.offsetY;let f=null;for(const p of this.points){if(Math.hypot(p.x-x,p.y-y)<8){f=p;break;}}if(f&&e.ctrlKey&&this.points.length>2&&(f.x!==0&&f.x!==255)){this.points=this.points.filter(p=>p!==f);this.draggingPoint=null;this.draw();this.generateLUT();this.onChange(true);}else if(f){this.draggingPoint=f;}else{const nP={x,y};this.points.push(nP);this.points.sort((a,b)=>a.x-b.x);this.draggingPoint=nP;}this.draw();}
+        onMouseMove(e){if(!this.draggingPoint)return;if(this.draggingPoint.x!==0&&this.draggingPoint.x!==255){this.draggingPoint.x=Math.max(1,Math.min(254,e.offsetX));}this.draggingPoint.y=Math.max(0,Math.min(255,e.offsetY));this.points.sort((a,b)=>a.x-b.x);this.draw();this.onChange(false);}
+        onMouseUp(){if(this.draggingPoint){this.draggingPoint=null;this.generateLUT();this.onChange(true);}}
     }
-
-    // --- Main Application Initialization ---
+    
+    // =================================================================================
+    // 4. Initialization
+    // =================================================================================
     async function init() {
         setupEventListeners();
-        toneCurve = new ToneCurve('toneCurveContainer', () => { if (originalImage) pushHistory('Adjust Tone Curve'); });
+        toneCurve = new ToneCurve('toneCurveContainer', (commit) => { if (originalImage && commit) pushHistory('Adjust Tone Curve'); else if(originalImage) render(); });
         await loadBodyPixModel();
         updateUI();
     }
@@ -72,31 +81,32 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadBodyPixModel() { try { showLoader('Loading AI Model...'); bodyPixModel = await bodyPix.load({architecture: 'MobileNetV1', outputStride: 16, multiplier: 0.75, quantBytes: 2}); hideLoader(); } catch (e) { console.error("Failed to load BodyPix model:", e); dom.loaderText.innerText = 'Failed to load AI Model.'; } }
 
     function setupEventListeners() {
-        Object.values(dom).forEach(el => { if (el && el.id) window[el.id] = el; }); // Make elements globally accessible for simplicity
-        loadButton.addEventListener('click', () => imageLoader.click());
-        imageLoader.addEventListener('change', handleImageLoad);
-        saveButton.addEventListener('click', saveImage);
-        undoButton.addEventListener('click', undo);
-        redoButton.addEventListener('click', redo);
-        selectSubjectButton.addEventListener('click', createSubjectMask);
-        radialMaskButton.addEventListener('click', startRadialMaskTool);
-        showMaskOverlayCheckbox.addEventListener('change', render);
-        deleteMaskButton.addEventListener('click', deleteActiveMask);
-        savePresetButton.addEventListener('click', savePreset);
-        loadPresetButton.addEventListener('click', () => presetLoader.click());
-        presetLoader.addEventListener('change', loadPreset);
-        cropButton.addEventListener('click', startCropTool);
-        applyCropButton.addEventListener('click', applyCrop);
-        cancelCropButton.addEventListener('click', cancelCrop);
-        rotateLeftButton.addEventListener('click', () => applyRotation(-90));
-        rotateRightButton.addEventListener('click', () => applyRotation(90));
-        flipHorizontalButton.addEventListener('click', () => applyFlip('horizontal'));
-        flipVerticalButton.addEventListener('click', () => applyFlip('vertical'));
+        dom.loadButton.addEventListener('click', () => dom.imageLoader.click());
+        dom.imageLoader.addEventListener('change', handleImageLoad);
+        dom.saveButton.addEventListener('click', saveImage);
+        dom.undoButton.addEventListener('click', undo);
+        dom.redoButton.addEventListener('click', redo);
+        dom.selectSubjectButton.addEventListener('click', createSubjectMask);
+        dom.radialMaskButton.addEventListener('click', startRadialMaskTool);
+        dom.showMaskOverlayCheckbox.addEventListener('change', render);
+        dom.deleteMaskButton.addEventListener('click', deleteActiveMask);
+        dom.savePresetButton.addEventListener('click', savePreset);
+        dom.loadPresetButton.addEventListener('click', () => dom.presetLoader.click());
+        dom.presetLoader.addEventListener('change', loadPreset);
+        dom.cropButton.addEventListener('click', startCropTool);
+        dom.applyCropButton.addEventListener('click', applyCrop);
+        dom.cancelCropButton.addEventListener('click', cancelCrop);
+        dom.rotateLeftButton.addEventListener('click', () => applyRotation(-90));
+        dom.rotateRightButton.addEventListener('click', () => applyRotation(90));
+        dom.flipHorizontalButton.addEventListener('click', () => applyFlip('horizontal'));
+        dom.flipVerticalButton.addEventListener('click', () => applyFlip('vertical'));
         dom.allSliders.forEach(slider => { slider.addEventListener('input', handleSliderInput); slider.addEventListener('change', handleSliderChange); });
         canvas.addEventListener('mousedown', onCanvasMouseDown); canvas.addEventListener('mousemove', onCanvasMouseMove); canvas.addEventListener('mouseup', onCanvasMouseUp); canvas.addEventListener('mouseleave', onCanvasMouseUp);
     }
     
-    // --- Image Handling & Destructive Transforms ---
+    // =================================================================================
+    // 5. Image Handling & Destructive Transforms
+    // =================================================================================
     function handleImageLoad(e) { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = (ev) => { originalImage = new Image(); originalImage.onload = () => commitTransform(originalImage, 'Load Image'); originalImage.src = ev.target.result; }; r.readAsDataURL(f); }
     function commitTransform(img, name) { originalImage = img; canvas.width = img.width; canvas.height = img.height; ctx.drawImage(img, 0, 0); originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height); historyStack = []; historyIndex = -1; currentTool = null; pushHistory(name, true); updateUI(); }
     function startCropTool() { if (!originalImage) return; currentTool = 'crop'; cropBox = { x: 0, y: 0, w: canvas.width, h: canvas.height }; updateUI(); render(); }
@@ -105,14 +115,19 @@ document.addEventListener('DOMContentLoaded', () => {
     function applyRotation(deg) { if (!originalImage) return; const rad = deg * Math.PI / 180; const w = canvas.width, h = canvas.height; const nW = Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad)); const nH = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad)); const c = document.createElement('canvas'); c.width = nW; c.height = nH; const tCtx = c.getContext('2d'); tCtx.translate(nW / 2, nH / 2); tCtx.rotate(rad); tCtx.drawImage(canvas, -w / 2, -h / 2); const img = new Image(); img.onload = () => commitTransform(img, `Rotate ${deg}°`); img.src = c.toDataURL(); }
     function applyFlip(dir) { if (!originalImage) return; const w = canvas.width, h = canvas.height; const c = document.createElement('canvas'); c.width = w; c.height = h; const tCtx = c.getContext('2d'); if (dir === 'horizontal') { tCtx.translate(w, 0); tCtx.scale(-1, 1); } else { tCtx.translate(0, h); tCtx.scale(1, -1); } tCtx.drawImage(canvas, 0, 0); const img = new Image(); img.onload = () => commitTransform(img, `Flip ${dir}`); img.src = c.toDataURL(); }
 
-    // --- History & State Management (Non-destructive) ---
+    // =================================================================================
+    // 6. History & State Management
+    // =================================================================================
     function pushHistory(actionName, isBaseState = false) {
         if (!originalImage) return;
-        const currentState = (historyIndex > -1 && !isBaseState) ? historyStack[historyIndex] : { globalEdits: getEmptyEdits(), masks: [], activeMaskId: null, };
+        const currentState = (historyIndex > -1 && !isBaseState) ? historyStack[historyIndex] : { globalEdits: getEmptyEdits(), masks: [], activeMaskId: null };
         const newState = JSON.parse(JSON.stringify(currentState));
-        dom.allSliders.forEach(s => { const key = s.id.replace('mask-', ''); if (s.closest('#mask-edit-panel')) { if (newState.activeMaskId) { const mask = newState.masks.find(m => m.id === newState.activeMaskId); if(mask) mask.edits[key] = parseFloat(s.value); } } else { newState.globalEdits[key] = parseFloat(s.value); }});
+        
+        // Update state from UI elements
+        dom.allSliders.forEach(s => { const key = s.id.replace('mask-', ''); if (s.closest('#mask-edit-panel')) { if (newState.activeMaskId) { const mask = newState.masks.find(m => m.id === newState.activeMaskId); if (mask) mask.edits[key] = parseFloat(s.value); } } else { newState.globalEdits[key] = parseFloat(s.value); } });
         if(toneCurve) newState.globalEdits.toneCurvePoints = toneCurve.points;
         newState.actionName = actionName;
+
         historyStack = historyStack.slice(0, historyIndex + 1); historyStack.push(newState); historyIndex++;
         render(); updateUI();
     }
@@ -127,40 +142,50 @@ document.addEventListener('DOMContentLoaded', () => {
     function undo() { if (historyIndex > 0) loadState(historyIndex - 1); }
     function redo() { if (historyIndex < historyStack.length - 1) loadState(historyIndex + 1); }
 
-    // --- Masking Logic ---
-    async function createSubjectMask() { if (!originalImage || !bodyPixModel) return; showLoader('Detecting Subject...'); const seg = await bodyPixModel.segmentPerson(canvas, { flipHorizontal: false, internalResolution: 'medium', segmentationThreshold: 0.7 }); const maskData = new Uint8ClampedArray(seg.data.map(p => p * 255)); const mask = { id: 'mask_' + Date.now(), name: 'Subject 1', type: 'ai', edits: getEmptyEdits(), maskData: Array.from(maskData) }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; pushHistory('Select Subject'); hideLoader(); }
+    // =================================================================================
+    // 7. Masking Logic
+    // =================================================================================
+    async function createSubjectMask() { if (!originalImage || !bodyPixModel) return; showLoader('Detecting Subject...'); const seg = await bodyPixModel.segmentPerson(canvas, { flipHorizontal: false, internalResolution: 'medium', segmentationThreshold: 0.7 }); const maskData = new Uint8ClampedArray(seg.data.map(p => p * 255)); const mask = { id: 'mask_' + Date.now(), name: 'Subject '+(historyStack[historyIndex].masks.length+1), type: 'ai', edits: getEmptyEdits(), maskData: Array.from(maskData) }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; pushHistory('Select Subject'); hideLoader(); }
     function startRadialMaskTool() { if (!originalImage) return; currentTool = 'radial'; canvas.classList.add('drawing'); }
     function deleteActiveMask() { const state = historyStack[historyIndex]; if (!state.activeMaskId) return; state.masks = state.masks.filter(m => m.id !== state.activeMaskId); state.activeMaskId = null; pushHistory('Delete Mask'); }
 
-    // --- Canvas & Slider Event Handlers ---
-    function onCanvasMouseDown(e) { if (!originalImage || currentTool === null) return; isDragging = true; const [x, y] = getCanvasCoords(e); if (currentTool === 'crop') { dragHandle = getCropHandleAt(x, y); canvas.style.cursor = getCursorForCropHandle(dragHandle); } else if (currentTool === 'radial') { radialMaskParams = { startX: x, startY: y, endX: x, endY: y }; } }
-    function onCanvasMouseMove(e) { if (!isDragging) return; const [x, y] = getCanvasCoords(e); if (currentTool === 'crop') { updateCropBox(x, y); render(); } else if (currentTool === 'radial') { radialMaskParams.endX = x; radialMaskParams.endY = y; render(); } }
-    function onCanvasMouseUp(e) { if (!isDragging) return; isDragging = false; canvas.style.cursor = 'default'; if (currentTool === 'radial') { const {startX, startY, endX, endY} = radialMaskParams; const cx = startX, cy = startY; const rx = Math.abs(endX - cx), ry = Math.abs(endY - cy); if(rx < 5 || ry < 5) { currentTool = null; render(); return; } const mask = { id: 'mask_' + Date.now(), name: `Radial ${historyStack[historyIndex].masks.length+1}`, type: 'radial', params: { cx, cy, rx, ry }, edits: getEmptyEdits() }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; radialMaskParams = {}; currentTool = null; pushHistory('Add Radial Mask'); } else if (currentTool === 'crop') { dragHandle = null; } }
-    function handleSliderInput() { if (originalImage) requestAnimationFrame(render); } // Live preview
-    function handleSliderChange(e) { if (originalImage) pushHistory('Adjust ' + e.target.id); } // Commit to history
+    // =================================================================================
+    // 8. Canvas & Slider Event Handlers
+    // =================================================================================
+    function onCanvasMouseDown(e) { if (!originalImage || !currentTool) return; isDragging = true; dragStart = getCanvasCoords(e); if (currentTool === 'crop') { dragHandle = getCropHandleAt(dragStart.x, dragStart.y) || 'move'; canvas.style.cursor = getCursorForCropHandle(dragHandle); } else if (currentTool === 'radial') { radialMaskParams = { startX: dragStart.x, startY: dragStart.y, endX: dragStart.x, endY: dragStart.y }; } }
+    function onCanvasMouseMove(e) { if (!isDragging) return; const currentPos = getCanvasCoords(e); if (currentTool === 'crop') { updateCropBox(currentPos); render(); } else if (currentTool === 'radial') { radialMaskParams.endX = currentPos.x; radialMaskParams.endY = currentPos.y; render(); } }
+    function onCanvasMouseUp() { if (!isDragging) return; isDragging = false; canvas.style.cursor = 'default'; if (currentTool === 'radial') { const {startX, startY, endX, endY} = radialMaskParams; const rx = Math.abs(endX - startX), ry = Math.abs(endY - startY); if(rx < 5 && ry < 5) { currentTool = null; render(); return; } const mask = { id: 'mask_'+Date.now(), name: `Radial ${historyStack[historyIndex].masks.length+1}`, type: 'radial', params: { cx: startX, cy: startY, rx, ry }, edits: getEmptyEdits() }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; pushHistory('Add Radial Mask'); } currentTool = null; dragHandle = null; }
+    function handleSliderInput() { if (originalImage) requestAnimationFrame(render); }
+    function handleSliderChange(e) { if (originalImage) pushHistory('Adjust ' + e.target.id); }
 
-    // --- Core Rendering Pipeline ---
+    // =================================================================================
+    // 9. Core Rendering Pipeline
+    // =================================================================================
     function render() {
-        if (!originalImageData || historyIndex < 0) return; const state = historyStack[historyIndex]; if (!state) return;
+        if (!originalImageData || historyIndex < 0) return;
+        const state = historyStack[historyIndex]; if (!state) return;
         ctx.putImageData(originalImageData, 0, 0); const workingImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        if (state.globalEdits.clarity !== 0 || state.globalEdits.texture !== 0) { if(!blurredDataCache) blurredDataCache = applyBoxBlur(workingImageData.data, canvas.width, canvas.height, 5); } else { blurredDataCache = null; }
+        const clarity = state.globalEdits.clarity, texture = state.globalEdits.texture; const blurId = `${clarity}_${texture}`;
+        if ((clarity !== 0 || texture !== 0) && blurredDataCache.id !== blurId) { blurredDataCache = { id: blurId, data: applyBoxBlur(workingImageData.data, canvas.width, canvas.height, 5) }; }
         applyEditsToData(workingImageData.data, state.globalEdits, null, toneCurve.lut);
         for (const mask of state.masks) { let maskPixelData = generateMaskPixelData(mask); if (maskPixelData) applyEditsToData(workingImageData.data, mask.edits, maskPixelData, null); }
         ctx.putImageData(workingImageData, 0, 0);
         if (state.activeMaskId && dom.showMaskOverlayCheckbox.checked) { const mask = state.masks.find(m => m.id === state.activeMaskId); if (mask) { let maskData = generateMaskPixelData(mask); const oD = new ImageData(canvas.width, canvas.height); for (let i = 0; i < oD.data.length; i += 4) { oD.data[i] = 255; oD.data[i+3] = maskData[i/4] * 0.5; } ctx.putImageData(oD, 0, 0); } }
         if (currentTool === 'crop') drawCropUI(); if (currentTool === 'radial' && isDragging) drawRadialPreview();
     }
-    function applyEditsToData(data,edits,maskData,curveLUT){const{exposure,contrast,highlights,shadows,temperature,saturation,texture,clarity,dehaze,shadowsHue,shadowsSaturation,midtonesHue,midtonesSaturation,highlightsHue,highlightsSaturation}=edits;const eF=Math.pow(2,exposure/50);const cF=(259*(contrast+255))/(255*(259-contrast));const hF=highlights/100;const sF=shadows/100;const satF=1+(saturation/100);for(let i=0;i<data.length;i+=4){const mV=maskData?maskData[i/4]/255:1;if(mV===0)continue;const oR=data[i],oG=data[i+1],oB=data[i+2];let r=oR,g=oG,b=oB;if(curveLUT){r=curveLUT[r];g=curveLUT[g];b=curveLUT[b];}r*=eF;g*=eF;b*=eF;r=cF*(r-128)+128;g=cF*(g-128)+128;b=cF*(b-128)+128;const lum=0.2126*r+0.7152*g+0.0722*b;if(hF!==0){const hf=(lum/255)**2;r+=hf*hF*(255-r);g+=hf*hF*(255-g);b+=hf*hF*(255-b);}if(sF!==0){const sf=(1-(lum/255))**2;r+=sf*sF*r;g+=sf*sF*g;b+=sf*sF*b;}if(dehaze!==0){const mC=Math.min(r,g,b);const hF=(mC/255);const dA=dehaze/100*(1-hF)*20;r+=dA;g+=dA;b+=dA;}if(clarity!==0&&blurredDataCache){const bL=0.2126*blurredDataCache[i]+0.7152*blurredDataCache[i+1]+0.0722*blurredDataCache[i+2];const lC=lum-bL;const cA=lC*(clarity/250);r+=cA;g+=cA;b+=cA;}const lG=0.2126*r+0.7152*g+0.0722*b;let hS=0,sS=0;if(lG<85){const t=lG/85;hS=t*midtonesHue+(1-t)*shadowsHue;sS=t*midtonesSaturation+(1-t)*shadowsSaturation;}else if(lG>170){const t=(lG-170)/85;hS=(1-t)*midtonesHue+t*highlightsHue;sS=(1-t)*midtonesSaturation+t*highlightsSaturation;}else{hS=midtonesHue;sS=midtonesSaturation;}if(sS>0){const hsl=rgbToHsl(r,g,b);hsl[0]=(hsl[0]*360+hS)%360/360;hsl[1]+=sS/100;const rgb=hslToRgb(hsl[0],hsl[1],hsl[2]);r=rgb[0];g=rgb[1];b=rgb[2];}r+=temperature;g+=temperature*0.5;b-=temperature;const avg=(r+g+b)/3;r=avg+satF*(r-avg);g=avg+satF*(g-avg);b=avg+satF*(b-avg);data[i]=oR+(r-oR)*mV;data[i+1]=oG+(g-oG)*mV;data[i+2]=oB+(b-oB)*mV;data[i]=Math.max(0,Math.min(255,data[i]));data[i+1]=Math.max(0,Math.min(255,data[i+1]));data[i+2]=Math.max(0,Math.min(255,data[i+2]));}}
+    function applyEditsToData(data,edits,maskData,curveLUT){const{exposure,contrast,highlights,shadows,temperature,saturation,texture,clarity,dehaze,shadowsHue,shadowsSaturation,midtonesHue,midtonesSaturation,highlightsHue,highlightsSaturation}=edits;const eF=Math.pow(2,exposure/50);const cF=(259*(contrast+255))/(255*(259-contrast));const hF=highlights/100;const sF=shadows/100;const satF=1+(saturation/100);for(let i=0;i<data.length;i+=4){const mV=maskData?maskData[i/4]/255:1;if(mV===0)continue;const oR=data[i],oG=data[i+1],oB=data[i+2];let r=oR,g=oG,b=oB;if(curveLUT){r=curveLUT[r];g=curveLUT[g];b=curveLUT[b];}r*=eF;g*=eF;b*=eF;r=cF*(r-128)+128;g=cF*(g-128)+128;b=cF*(b-128)+128;const lum=0.2126*r+0.7152*g+0.0722*b;if(hF!==0){const hf=(lum/255)**2;r+=hf*hF*(255-r);g+=hf*hF*(255-g);b+=hf*hF*(255-b);}if(sF!==0){const sf=(1-(lum/255))**2;r+=sf*sF*r;g+=sf*sF*g;b+=sf*sF*b;}if(dehaze!==0){const mC=Math.min(r,g,b);const hf=(mC/255);const dA=dehaze/100*(1-hf)*20;r+=dA;g+=dA;b+=dA;}if(clarity!==0&&blurredDataCache.data){const bL=0.2126*blurredDataCache.data[i]+0.7152*blurredDataCache.data[i+1]+0.0722*blurredDataCache.data[i+2];const lC=lum-bL;const cA=lC*(clarity/250);r+=cA;g+=cA;b+=cA;}const lG=0.2126*r+0.7152*g+0.0722*b;let hS=0,sS=0;if(lG<85){const t=lG/85;hS=t*midtonesHue+(1-t)*shadowsHue;sS=t*midtonesSaturation+(1-t)*shadowsSaturation;}else if(lG>170){const t=(lG-170)/85;hS=(1-t)*midtonesHue+t*highlightsHue;sS=(1-t)*midtonesSaturation+t*highlightsSaturation;}else{hS=midtonesHue;sS=midtonesSaturation;}if(sS>0){const hsl=rgbToHsl(r,g,b);hsl[0]=(hsl[0]*360+hS)%360/360;hsl[1]+=sS/100;const rgb=hslToRgb(hsl[0],hsl[1],hsl[2]);r=rgb[0];g=rgb[1];b=rgb[2];}r+=temperature;g+=temperature*0.5;b-=temperature;const avg=(r+g+b)/3;r=avg+satF*(r-avg);g=avg+satF*(g-avg);b=avg+satF*(b-avg);data[i]=oR+(r-oR)*mV;data[i+1]=oG+(g-oG)*mV;data[i+2]=oB+(b-oB)*mV;data[i]=Math.max(0,Math.min(255,data[i]));data[i+1]=Math.max(0,Math.min(255,data[i+1]));data[i+2]=Math.max(0,Math.min(255,data[i+2]));}}
     
-    // --- UI Update & Helper Functions ---
-    function updateUI(){dom.undoButton.disabled=historyIndex<=0;dom.redoButton.disabled=historyIndex>=historyStack.length-1;const s=historyIndex>-1?historyStack[historyIndex]:null;dom.maskList.innerHTML='';if(s){s.masks.forEach(m=>{const li=document.createElement('li');li.textContent=m.name;li.className=m.id===s.activeMaskId?'active':'';li.onclick=()=>{s.activeMaskId=m.id;loadState(historyIndex);};dom.maskList.appendChild(li);});dom.maskEditPanel.classList.toggle('hidden',!s.activeMaskId);if(s.activeMaskId)dom.maskEditTitle.innerText=`Edit: ${s.masks.find(m=>m.id===s.activeMaskId).name}`;else{document.querySelectorAll('#mask-edit-panel .slider').forEach(sl=>sl.value=0);}}const iCM=currentTool==='crop';dom.cropControls.classList.toggle('hidden',!iCM);dom.ioButtons.classList.toggle('hidden',iCM);canvas.classList.toggle('cropping',iCM);dom.allToolButtons.forEach(el=>el.disabled=iCM||!originalImage);dom.allSliders.forEach(el=>el.disabled=iCM||!originalImage);dom.historyList.innerHTML='';historyStack.forEach((st,i)=>{const li=document.createElement('li');li.textContent=st.actionName;li.className=i===historyIndex?'active':'';li.onclick=()=>loadState(i);dom.historyList.appendChild(li);});dom.historyList.scrollTop=dom.historyList.scrollHeight;}
+    // =================================================================================
+    // 10. UI Update & Helper Functions
+    // =================================================================================
+    function updateUI(){dom.undoButton.disabled=historyIndex<=0;dom.redoButton.disabled=historyIndex>=historyStack.length-1;const state=historyIndex>-1?historyStack[historyIndex]:null;dom.maskList.innerHTML='';if(state){state.masks.forEach(m=>{const li=document.createElement('li');li.textContent=m.name;li.className=m.id===state.activeMaskId?'active':'';li.onclick=()=>{if(currentTool)return;state.activeMaskId=m.id;loadState(historyIndex);};dom.maskList.appendChild(li);});dom.maskEditPanel.classList.toggle('hidden',!state.activeMaskId);if(state.activeMaskId)dom.maskEditTitle.innerText=`Edit: ${state.masks.find(m=>m.id===state.activeMaskId).name}`;else{document.querySelectorAll('#mask-edit-panel .slider').forEach(sl=>sl.value=0);}}const iCM=currentTool==='crop';dom.cropControls.classList.toggle('hidden',!iCM);dom.ioButtons.classList.toggle('hidden',iCM);canvas.classList.toggle('cropping',iCM);dom.allToolButtons.forEach(el=>el.disabled=iCM||!originalImage);dom.allSliders.forEach(el=>el.disabled=iCM||!originalImage);dom.historyList.innerHTML='';historyStack.forEach((st,i)=>{const li=document.createElement('li');li.textContent=st.actionName;li.className=i===historyIndex?'active':'';li.onclick=()=>loadState(i);dom.historyList.appendChild(li);});dom.historyList.scrollTop=dom.historyList.scrollHeight;}
     function generateMaskPixelData(m){if(m.type==='ai')return new Uint8ClampedArray(m.maskData);if(m.type==='radial'){const{cx,cy,rx,ry}=m.params;const d=new Uint8ClampedArray(canvas.width*canvas.height);for(let y=0;y<canvas.height;y++){for(let x=0;x<canvas.width;x++){const i=y*canvas.width+x;const v=((x-cx)/rx)**2+((y-cy)/ry)**2;d[i]=v<1?(1-Math.sqrt(v))*255:0;}}return d;}return null;}
-    function getCanvasCoords(e){const r=canvas.getBoundingClientRect();return[(e.clientX-r.left)/r.width*canvas.width,(e.clientY-r.top)/r.height*canvas.height];}
-    function getCropHandleAt(x,y){const s=10/(canvas.getBoundingClientRect().width/canvas.width);const h={tl:{x:cropBox.x,y:cropBox.y},tr:{x:cropBox.x+cropBox.w,y:cropBox.y},bl:{x:cropBox.x,y:cropBox.y+cropBox.h},br:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h},t:{x:cropBox.x+cropBox.w/2,y:cropBox.y},b:{x:cropBox.x+cropBox.w/2,y:cropBox.y+cropBox.h},l:{x:cropBox.x,y:cropBox.y+cropBox.h/2},r:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h/2},};for(const[n,p]of Object.entries(h)){if(Math.abs(x-p.x)<s&&Math.abs(y-p.y)<s)return n;}return null;}
+    function getCanvasCoords(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width*canvas.width,y:(e.clientY-r.top)/r.height*canvas.height};}
+    function getCropHandleAt(x,y){const s=10/(canvas.getBoundingClientRect().width/canvas.width);const h={tl:{x:cropBox.x,y:cropBox.y},tr:{x:cropBox.x+cropBox.w,y:cropBox.y},bl:{x:cropBox.x,y:cropBox.y+cropBox.h},br:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h},t:{x:cropBox.x+cropBox.w/2,y:cropBox.y},b:{x:cropBox.x+cropBox.w/2,y:cropBox.y+cropBox.h},l:{x:cropBox.x,y:cropBox.y+cropBox.h/2},r:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h/2},};for(const[n,p]of Object.entries(h)){if(Math.hypot(x-p.x,y-p.y)<s)return n;}return null;}
     function getCursorForCropHandle(h){if(h==='tl'||h==='br')return'nwse-resize';if(h==='tr'||h==='bl')return'nesw-resize';if(h==='t'||h==='b')return'ns-resize';if(h==='l'||h==='r')return'ew-resize';return'move';}
-    function updateCropBox(x,y){const min=20;const[ox,oy,ow,oh]=[cropBox.x,cropBox.y,cropBox.w,cropBox.h];if(dragHandle==='move'){cropBox.x=x-ow/2;cropBox.y=y-oh/2;return;}if(dragHandle.includes('l')){cropBox.w+=ox-x;cropBox.x=x;}if(dragHandle.includes('r')){cropBox.w=x-ox;}if(dragHandle.includes('t')){cropBox.h+=oy-y;cropBox.y=y;}if(dragHandle.includes('b')){cropBox.h=y-oy;}if(cropBox.w<min){if(dragHandle.includes('l'))cropBox.x=ox+ow-min;cropBox.w=min;}if(cropBox.h<min){if(dragHandle.includes('t'))cropBox.y=oy+oh-min;cropBox.h=min;}}
+    function updateCropBox(pos){const min=20;const dx=pos.x-dragStart.x;const dy=pos.y-dragStart.y;if(dragHandle==='move'){cropBox.x+=dx;cropBox.y+=dy;}if(dragHandle.includes('l')){cropBox.x+=dx;cropBox.w-=dx;}if(dragHandle.includes('r')){cropBox.w+=dx;}if(dragHandle.includes('t')){cropBox.y+=dy;cropBox.h-=dy;}if(dragHandle.includes('b')){cropBox.h+=dy;}if(cropBox.w<min){if(dragHandle.includes('l'))cropBox.x-=min-cropBox.w;cropBox.w=min;}if(cropBox.h<min){if(dragHandle.includes('t'))cropBox.y-=min-cropBox.h;cropBox.h=min;}dragStart=pos;}
     function drawCropUI(){ctx.save();ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.clearRect(cropBox.x,cropBox.y,cropBox.w,cropBox.h);ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1;ctx.strokeRect(cropBox.x,cropBox.y,cropBox.w,cropBox.h);ctx.restore();}
-    function drawRadialPreview(){ctx.save();ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=2;const{startX,startY,endX,endY}=radialMaskParams;const cx=startX,cy=startY;const rx=Math.abs(endX-cx);const ry=Math.abs(endY-cy);ctx.beginPath();ctx.ellipse(cx,cy,rx,ry,0,0,2*Math.PI);ctx.stroke();ctx.restore();}
+    function drawRadialPreview(){ctx.save();ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=2;const{startX,startY,endX,endY}=radialMaskParams;ctx.beginPath();ctx.ellipse(startX,startY,Math.abs(endX-startX),Math.abs(endY-startY),0,0,2*Math.PI);ctx.stroke();ctx.restore();}
     function saveImage(){if(!originalImage)return;const l=document.createElement('a');l.download='luma-edited.png';l.href=canvas.toDataURL('image/png');l.click();}
     function savePreset(){if(historyIndex<0)return;const s=historyStack[historyIndex];const p={globalEdits:s.globalEdits,masks:s.masks.map(m=>({name:m.name,type:m.type,params:m.params,edits:m.edits}))};const b=new Blob([JSON.stringify(p,null,2)],{type:'application/json'});const l=document.createElement('a');l.href=URL.createObjectURL(b);l.download='preset.luma';l.click();}
     function loadPreset(e){if(!originalImage)return alert("Load image first");const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=(ev)=>{try{const p=JSON.parse(ev.target.result);const s=historyStack[historyIndex];s.globalEdits=p.globalEdits;s.masks=p.masks.map(m=>({...m,id:'mask_'+Date.now()}));s.activeMaskId=null;pushHistory('Load Preset');}catch(e){alert('Invalid preset file.');}};r.readAsText(f);}
