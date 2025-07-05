@@ -1,21 +1,22 @@
 document.addEventListener('DOMContentLoaded', () => {
     // =================================================================================
-    // 1. STATE MANAGEMENT & DOM REFERENCES
+    // 1. DOM Element References & Global State
     // =================================================================================
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const dom = {}; // Populated in init()
+    const dom = {}; // Populated in init() for clean, performant access
 
+    // --- Application State ---
     let originalImage = null, originalImageData = null, historyStack = [], historyIndex = -1;
     let currentTool = null, isDragging = false, dragHandle = null, dragStartCoords = {};
     let cropBox = {}, bodyPixModel = null, toneCurve;
     let blurCache = { clarity: null, texture: null, id: '' };
 
     // =================================================================================
-    // 2. INITIALIZATION & SETUP
+    // 2. INITIALIZATION
     // =================================================================================
     async function init() {
-        // Cache all DOM elements by their ID for easy, performant access
+        // Cache all DOM elements by their ID. This is more efficient than repeated lookups.
         document.querySelectorAll('[id]').forEach(el => dom[el.id] = el);
         dom.allSliders = document.querySelectorAll('.slider');
         dom.allToolButtons = document.querySelectorAll('.tool-button, #mask-tools button');
@@ -31,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await loadBodyPixModel();
         updateUI();
     }
-    init();
+    init(); // Start the application
 
     async function loadBodyPixModel() {
         try {
@@ -75,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         canvas.addEventListener('mouseup', onCanvasMouseUp);
         canvas.addEventListener('mouseleave', onCanvasMouseUp);
     }
-
+    
     // =================================================================================
     // 3. CORE RENDERING PIPELINE
     // =================================================================================
@@ -84,11 +85,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const state = historyStack[historyIndex];
         if (!state) return;
 
+        // Start fresh from the base image of the current state
         ctx.putImageData(originalImageData, 0, 0);
         const workingImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        
+        // Efficiently calculate blurs for Clarity/Texture ONLY when needed
         const gEdits = state.globalEdits;
-
-        // Efficiently calculate blurs ONLY when values change.
         const blurId = `c${gEdits.clarity}t${gEdits.texture}`;
         if (blurCache.id !== blurId) {
             blurCache.clarity = (gEdits.clarity !== 0) ? applyBoxBlur(workingImageData.data, canvas.width, canvas.height, 5) : null;
@@ -96,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
             blurCache.id = blurId;
         }
 
-        // Apply global edits first, then layer each mask's edits on top
+        // Apply global edits, then layer each mask's edits on top
         applyEditsToData(workingImageData.data, gEdits, null, toneCurve.lut);
         for (const mask of state.masks) {
             const maskPixelData = generateMaskPixelData(mask);
@@ -109,12 +111,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentTool === 'crop') drawCropUI();
         if (currentTool === 'radial' && isDragging) drawRadialPreview();
     }
-
+    
     // =================================================================================
-    // 4. NON-DESTRUCTIVE EDIT LOGIC (The Algorithms)
+    // 4. IMAGE PROCESSING ALGORITHMS
     // =================================================================================
     function applyEditsToData(data, edits, maskData, curveLUT) {
-        const { exposure, contrast, highlights, shadows, temperature, saturation, texture, clarity, dehaze, shadowsHue, shadowsSaturation, midtonesHue, midtonesSaturation, highlightsHue, highlightsSaturation } = edits;
+        const {exposure, contrast, highlights, shadows, temperature, saturation, texture, clarity, dehaze, shadowsHue, shadowsSaturation, midtonesHue, midtonesSaturation, highlightsHue, highlightsSaturation} = edits;
         const eF=Math.pow(2,exposure/50),cF=(259*(contrast+255))/(255*(259-contrast)),hF=highlights/100,sF=shadows/100,satF=1+(saturation/100);
         
         for (let i = 0; i < data.length; i += 4) {
@@ -155,44 +157,47 @@ document.addEventListener('DOMContentLoaded', () => {
             data[i]=Math.max(0,Math.min(255,data[i]));data[i+1]=Math.max(0,Math.min(255,data[i+1]));data[i+2]=Math.max(0,Math.min(255,data[i+2]));
         }
     }
-    
+
     // =================================================================================
-    // 5. DESTRUCTIVE EDIT LOGIC (Transforms)
+    // 5. DESTRUCTIVE TRANSFORMS (Changes the base image)
     // =================================================================================
     function commitTransform(img, name) { originalImage=img;canvas.width=img.width;canvas.height=img.height;ctx.drawImage(img,0,0);originalImageData=ctx.getImageData(0,0,canvas.width,canvas.height);historyStack=[];historyIndex=-1;currentTool=null;blurCache={clarity:null,texture:null,id:''};pushHistory(name,true);updateUI();}
-    function applyRotation(deg) { if(!originalImage)return;const rad=deg*Math.PI/180;const w=canvas.width,h=canvas.height;const nW=Math.round(Math.abs(w*Math.cos(rad))+Math.abs(h*Math.sin(rad)));const nH=Math.round(Math.abs(w*Math.sin(rad))+Math.abs(h*Math.cos(rad)));const c=document.createElement('canvas');c.width=nW;c.height=nH;const tCtx=c.getContext('2d');tCtx.translate(nW/2,nH/2);tCtx.rotate(rad);tCtx.drawImage(canvas,-w/2,-h/2);const img=new Image();img.onload=()=>commitTransform(img,`Rotate ${deg}°`);img.src=c.toDataURL();}
-    function applyFlip(dir) { if(!originalImage)return;const w=canvas.width,h=canvas.height;const c=document.createElement('canvas');c.width=w;c.height=h;const tCtx=c.getContext('2d');if(dir==='horizontal'){tCtx.translate(w,0);tCtx.scale(-1,1);}else{tCtx.translate(0,h);tCtx.scale(1,-1);}tCtx.drawImage(canvas,0,0);const img=new Image();img.onload=()=>commitTransform(img,`Flip ${dir}`);img.src=c.toDataURL();}
+    function applyCrop() { if (!originalImage) return; currentTool = null; const c = document.createElement('canvas'); c.width = Math.round(cropBox.w); c.height = Math.round(cropBox.h); const tempCtx = c.getContext('2d'); tempCtx.drawImage(canvas, cropBox.x, cropBox.y, cropBox.w, cropBox.h, 0, 0, c.width, c.height); const img = new Image(); img.onload = () => commitTransform(img, 'Apply Crop'); img.src = c.toDataURL(); }
+    function cancelCrop() { currentTool = null; render(); updateUI(); }
+    function applyRotation(deg) { if (!originalImage) return; const rad=deg*Math.PI/180;const w=canvas.width,h=canvas.height;const nW=Math.round(Math.abs(w*Math.cos(rad))+Math.abs(h*Math.sin(rad)));const nH=Math.round(Math.abs(w*Math.sin(rad))+Math.abs(h*Math.cos(rad)));const c=document.createElement('canvas');c.width=nW;c.height=nH;const tCtx=c.getContext('2d');tCtx.translate(nW/2,nH/2);tCtx.rotate(rad);tCtx.drawImage(canvas,-w/2,-h/2);const img=new Image();img.onload=()=>commitTransform(img,`Rotate ${deg}°`);img.src=c.toDataURL();}
+    function applyFlip(dir) { if (!originalImage) return; const w=canvas.width,h=canvas.height;const c=document.createElement('canvas');c.width=w;c.height=h;const tCtx=c.getContext('2d');if(dir==='horizontal'){tCtx.translate(w,0);tCtx.scale(-1,1);}else{tCtx.translate(0,h);tCtx.scale(1,-1);}tCtx.drawImage(canvas,0,0);const img=new Image();img.onload=()=>commitTransform(img,`Flip ${dir}`);img.src=c.toDataURL();}
     
     // =================================================================================
-    // 6. MASKING LOGIC
+    // 6. TOOL & MASKING LOGIC
     // =================================================================================
-    async function createSubjectMask() { if(!originalImage||!bodyPixModel)return;showLoader('Detecting Subject...');try{const seg=await bodyPixModel.segmentPerson(canvas,{flipHorizontal:false,internalResolution:'medium',segmentationThreshold:0.7});if(seg.data.every(p=>p===0)){alert("No person detected in the image.");hideLoader();return;}const maskData=new Uint8ClampedArray(seg.data.map(p=>p*255));const mask={id:'mask_'+Date.now(),name:`Subject ${historyStack[historyIndex].masks.length+1}`,type:'ai',edits:getEmptyEdits(),maskData:Array.from(maskData)};const state=historyStack[historyIndex];state.masks.push(mask);state.activeMaskId=mask.id;pushHistory('Select Subject');}catch(e){console.error("Masking failed:",e);alert("An error occurred during subject detection.");}finally{hideLoader();}}
-    function startRadialMaskTool() { if(!originalImage)return;currentTool='radial';canvas.classList.add('drawing');}
-    function deleteActiveMask() {const state=historyStack[historyIndex];if(!state.activeMaskId)return;state.masks=state.masks.filter(m=>m.id!==state.activeMaskId);state.activeMaskId=null;pushHistory('Delete Mask');}
+    function startCropTool() { if (!originalImage) return; currentTool = 'crop'; cropBox = { x: canvas.width * 0.1, y: canvas.height * 0.1, w: canvas.width * 0.8, h: canvas.height * 0.8 }; updateUI(); render(); }
+    async function createSubjectMask() { if (!originalImage || !bodyPixModel) return; showLoader('Detecting Subject...'); try { const seg = await bodyPixModel.segmentPerson(canvas, { flipHorizontal: false, internalResolution: 'medium', segmentationThreshold: 0.7 }); if (seg.data.every(p => p === 0)) { alert("No person detected in the image."); return; } const maskData = new Uint8ClampedArray(seg.data.map(p => p * 255)); const mask = { id: 'mask_'+Date.now(), name: `Subject ${historyStack[historyIndex].masks.length+1}`, type: 'ai', edits: getEmptyEdits(), maskData: Array.from(maskData) }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; pushHistory('Select Subject'); } catch(e) { console.error("Masking failed:", e); alert("An error occurred during subject detection."); } finally { hideLoader(); } }
+    function startRadialMaskTool() { if (!originalImage) return; currentTool = 'radial'; canvas.classList.add('drawing'); }
+    function deleteActiveMask() { const state = historyStack[historyIndex]; if (!state.activeMaskId) return; state.masks = state.masks.filter(m => m.id !== state.activeMaskId); state.activeMaskId = null; pushHistory('Delete Mask'); }
 
     // =================================================================================
-    // 7. HISTORY & STATE
+    // 7. HISTORY & STATE MANAGEMENT
     // =================================================================================
-    function getEmptyEdits(){return{exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,saturation:0,shadowsHue:0,shadowsSaturation:0,midtonesHue:0,midtonesSaturation:0,highlightsHue:0,highlightsSaturation:0,texture:0,clarity:0,dehaze:0,toneCurvePoints:[{x:0,y:255},{x:255,y:0}]};}
-    function pushHistory(actionName,isBaseState=false){if(!originalImage)return;const currentState=(historyIndex>-1&&!isBaseState)?historyStack[historyIndex]:{globalEdits:getEmptyEdits(),masks:[],activeMaskId:null};const newState=JSON.parse(JSON.stringify(currentState));dom.allSliders.forEach(s=>{const key=s.id.replace('mask-','');if(s.closest('#mask-edit-panel')){if(newState.activeMaskId){const mask=newState.masks.find(m=>m.id===newState.activeMaskId);if(mask)mask.edits[key]=parseFloat(s.value);}}else{newState.globalEdits[key]=parseFloat(s.value);}});if(toneCurve)newState.globalEdits.toneCurvePoints=toneCurve.points;newState.actionName=actionName;historyStack=historyStack.slice(0,historyIndex+1);historyStack.push(newState);historyIndex++;render();updateUI();}
-    function loadState(index){if(index<0||index>=historyStack.length)return;historyIndex=index;const state=historyStack[historyIndex];Object.entries(state.globalEdits).forEach(([key,value])=>{const s=document.getElementById(key);if(s&&s.type==='range')s.value=value;});if(toneCurve&&state.globalEdits.toneCurvePoints)toneCurve.setPoints(state.globalEdits.toneCurvePoints);const activeMask=state.activeMaskId?state.masks.find(m=>m.id===state.activeMaskId):null;document.querySelectorAll('#mask-edit-panel .slider').forEach(s=>{const key=s.id.replace('mask-','');s.value=activeMask?(activeMask.edits[key]||0):0;});render();updateUI();}
-    function undo(){if(historyIndex>0)loadState(historyIndex-1);}
-    function redo(){if(historyIndex<historyStack.length-1)loadState(historyIndex+1);}
+    function getEmptyEdits() { return { exposure:0,contrast:0,highlights:0,shadows:0,temperature:0,saturation:0,shadowsHue:0,shadowsSaturation:0,midtonesHue:0,midtonesSaturation:0,highlightsHue:0,highlightsSaturation:0,texture:0,clarity:0,dehaze:0,toneCurvePoints:[{x:0,y:255},{x:255,y:0}] }; }
+    function pushHistory(actionName, isBaseState=false) { if(!originalImage) return; const currentState = (historyIndex > -1 && !isBaseState) ? historyStack[historyIndex] : { globalEdits: getEmptyEdits(), masks: [], activeMaskId: null }; const newState = JSON.parse(JSON.stringify(currentState)); dom.allSliders.forEach(s => { const key = s.id.replace('mask-',''); if (s.closest('#mask-edit-panel')) { if (newState.activeMaskId) { const mask = newState.masks.find(m => m.id === newState.activeMaskId); if (mask) mask.edits[key] = parseFloat(s.value); } } else { newState.globalEdits[key] = parseFloat(s.value); } }); if(toneCurve) newState.globalEdits.toneCurvePoints = toneCurve.points; newState.actionName = actionName; historyStack = historyStack.slice(0, historyIndex + 1); historyStack.push(newState); historyIndex++; render(); updateUI(); }
+    function loadState(index) { if (index < 0 || index >= historyStack.length) return; historyIndex = index; const state = historyStack[historyIndex]; Object.entries(state.globalEdits).forEach(([key, value]) => { const s = document.getElementById(key); if(s && s.type==='range') s.value = value; }); if (toneCurve && state.globalEdits.toneCurvePoints) toneCurve.setPoints(state.globalEdits.toneCurvePoints); const activeMask = state.activeMaskId ? state.masks.find(m => m.id === state.activeMaskId) : null; document.querySelectorAll('#mask-edit-panel .slider').forEach(s => { const key = s.id.replace('mask-',''); s.value = activeMask ? (activeMask.edits[key] || 0) : 0; }); render(); updateUI(); }
+    function undo() { if (historyIndex > 0) loadState(historyIndex - 1); }
+    function redo() { if (historyIndex < historyStack.length - 1) loadState(historyIndex + 1); }
 
     // =================================================================================
-    // 8. EVENT HANDLERS
+    // 8. EVENT HANDLERS (Corrected Logic)
     // =================================================================================
-    function onCanvasMouseDown(e){if(!originalImage||!currentTool)return;isDragging=true;dragStartCoords=getCanvasCoords(e);if(currentTool==='crop'){dragHandle=getCropHandleAt(dragStartCoords.x,dragStartCoords.y)||'move';canvas.style.cursor=getCursorForCropHandle(dragHandle);}}
-    function onCanvasMouseMove(e){if(!isDragging)return;const currentCoords=getCanvasCoords(e);if(currentTool==='crop'){updateCropBox(currentCoords,dragStartCoords);dragStartCoords=currentCoords;render();}else if(currentTool==='radial'){radialMaskParams={startX:dragStartCoords.x,startY:dragStartCoords.y,endX:currentCoords.x,endY:currentCoords.y};render();}}
-    function onCanvasMouseUp(e){if(!isDragging)return;isDragging=false;canvas.style.cursor='default';if(currentTool==='radial'){const{startX,startY,endX,endY}=radialMaskParams;const rx=Math.abs(endX-startX),ry=Math.abs(endY-startY);currentTool=null;canvas.classList.remove('drawing');if(rx>5||ry>5){const mask={id:'mask_'+Date.now(),name:`Radial ${historyStack[historyIndex].masks.length+1}`,type:'radial',params:{cx:startX,cy:startY,rx,ry},edits:getEmptyEdits()};const state=historyStack[historyIndex];state.masks.push(mask);state.activeMaskId=mask.id;pushHistory('Add Radial Mask');}else{render();}}else if(currentTool==='crop'){dragHandle=null;}}
-    function handleSliderInput(){if(originalImage)requestAnimationFrame(render);}
-    function handleSliderChange(e){if(originalImage){if(e.target.id==='clarity'||e.target.id==='texture')blurCache={clarity:null,texture:null,id:''};pushHistory('Adjust '+e.target.id);}}
+    function onCanvasMouseDown(e) { if (!originalImage || !currentTool) return; isDragging = true; dragStartCoords = getCanvasCoords(e); if (currentTool === 'crop') { dragHandle = getCropHandleAt(dragStartCoords.x, dragStartCoords.y) || 'move'; canvas.style.cursor = getCursorForCropHandle(dragHandle); } }
+    function onCanvasMouseMove(e) { if (!isDragging) return; const currentCoords = getCanvasCoords(e); if (currentTool === 'crop') { updateCropBox(currentCoords, dragStartCoords); dragStartCoords = currentCoords; render(); } else if (currentTool === 'radial') { radialMaskParams = { startX: dragStartCoords.x, startY: dragStartCoords.y, endX: currentCoords.x, endY: currentCoords.y }; render(); } }
+    function onCanvasMouseUp() { if (!isDragging) return; isDragging = false; canvas.style.cursor = 'default'; if (currentTool === 'radial') { const {startX, startY, endX, endY} = radialMaskParams; const rx = Math.abs(endX - startX), ry = Math.abs(endY - startY); if (rx > 5 || ry > 5) { const mask = { id: 'mask_'+Date.now(), name: `Radial ${historyStack[historyIndex].masks.length+1}`, type: 'radial', params: { cx: startX, cy: startY, rx, ry }, edits: getEmptyEdits() }; const state = historyStack[historyIndex]; state.masks.push(mask); state.activeMaskId = mask.id; pushHistory('Add Radial Mask'); } else { render(); } currentTool = null; canvas.classList.remove('drawing'); } else if (currentTool === 'crop') { dragHandle = null; /* Tool stays active */ } }
+    function handleSliderInput() { if (originalImage) requestAnimationFrame(render); }
+    function handleSliderChange(e) { if (originalImage) { if(e.target.id==='clarity'||e.target.id==='texture') blurCache.id=''; pushHistory('Adjust ' + e.target.id); } }
 
     // =================================================================================
     // 9. UI & HELPER FUNCTIONS
     // =================================================================================
-    function updateCropBox(currentPos,startPos){const dx=currentPos.x-startPos.x;const dy=currentPos.y-startPos.y;if(dragHandle==='move'){cropBox.x+=dx;cropBox.y+=dy;}else{if(dragHandle.includes('l')){cropBox.x+=dx;cropBox.w-=dx;}if(dragHandle.includes('r')){cropBox.w+=dx;}if(dragHandle.includes('t')){cropBox.y+=dy;cropBox.h-=dy;}if(dragHandle.includes('b')){cropBox.h+=dy;}}const minSize=20;if(cropBox.w<minSize){if(dragHandle.includes('l'))cropBox.x-=(minSize-cropBox.w);cropBox.w=minSize;}if(cropBox.h<minSize){if(dragHandle.includes('t'))cropBox.y-=(minSize-cropBox.h);cropBox.h=minSize;}}
-    function updateUI(){dom.undoButton.disabled=historyIndex<=0;dom.redoButton.disabled=historyIndex>=historyStack.length-1;const s=historyIndex>-1?historyStack[historyIndex]:null;dom.maskList.innerHTML='';if(s){s.masks.forEach(m=>{const li=document.createElement('li');li.textContent=m.name;li.className=m.id===s.activeMaskId?'active':'';li.onclick=()=>{if(currentTool)return;s.activeMaskId=m.id===s.activeMaskId?null:m.id;loadState(historyIndex);};dom.maskList.appendChild(li);});dom.maskEditPanel.classList.toggle('hidden',!s.activeMaskId);if(s.activeMaskId)dom.maskEditTitle.innerText=`Edit: ${s.masks.find(m=>m.id===s.activeMaskId).name}`;else{document.querySelectorAll('#mask-edit-panel .slider').forEach(sl=>sl.value=0);}}const iCM=currentTool==='crop';dom.cropControls.classList.toggle('hidden',!iCM);dom.ioButtons.classList.toggle('hidden',iCM);canvas.classList.toggle('cropping',iCM);dom.allToolButtons.forEach(el=>{el.disabled=el.id!=='cropButton'&&(iCM||!originalImage);});dom.allSliders.forEach(el=>el.disabled=iCM||!originalImage);dom.historyList.innerHTML='';historyStack.forEach((st,i)=>{const li=document.createElement('li');li.textContent=st.actionName;li.className=i===historyIndex?'active':'';li.onclick=()=>loadState(i);dom.historyList.appendChild(li);});dom.historyList.scrollTop=dom.historyList.scrollHeight;}
+    function updateCropBox(currentPos, startPos) { const dx = currentPos.x - startPos.x; const dy = currentPos.y - startPos.y; if (dragHandle === 'move') { cropBox.x += dx; cropBox.y += dy; } else { if (dragHandle.includes('l')) { cropBox.x += dx; cropBox.w -= dx; } if (dragHandle.includes('r')) { cropBox.w += dx; } if (dragHandle.includes('t')) { cropBox.y += dy; cropBox.h -= dy; } if (dragHandle.includes('b')) { cropBox.h += dy; } } const minSize = 20; if (cropBox.w < minSize) { if (dragHandle.includes('l')) cropBox.x -= minSize - cropBox.w; cropBox.w = minSize; } if (cropBox.h < minSize) { if (dragHandle.includes('t')) cropBox.y -= minSize - cropBox.h; cropBox.h = minSize; } }
+    function updateUI() { dom.undoButton.disabled=historyIndex<=0;dom.redoButton.disabled=historyIndex>=historyStack.length-1;const s=historyIndex>-1?historyStack[historyIndex]:null;dom.maskList.innerHTML='';if(s){s.masks.forEach(m=>{const li=document.createElement('li');li.textContent=m.name;li.className=m.id===s.activeMaskId?'active':'';li.onclick=()=>{if(currentTool)return;s.activeMaskId=m.id===s.activeMaskId?null:m.id;loadState(historyIndex);};dom.maskList.appendChild(li);});dom.maskEditPanel.classList.toggle('hidden',!s.activeMaskId);if(s.activeMaskId)dom.maskEditTitle.innerText=`Edit: ${s.masks.find(m=>m.id===s.activeMaskId).name}`;else{document.querySelectorAll('#mask-edit-panel .slider').forEach(sl=>sl.value=0);}}const iCM=currentTool==='crop';dom.cropControls.classList.toggle('hidden',!iCM);dom.ioButtons.classList.toggle('hidden',iCM);canvas.classList.toggle('cropping',iCM);dom.allToolButtons.forEach(el=>{el.disabled=el.id!=='cropButton'&&(iCM||!originalImage);});dom.allSliders.forEach(el=>el.disabled=iCM||!originalImage);dom.historyList.innerHTML='';historyStack.forEach((st,i)=>{const li=document.createElement('li');li.textContent=st.actionName;li.className=i===historyIndex?'active':'';li.onclick=()=>loadState(i);dom.historyList.appendChild(li);});dom.historyList.scrollTop=dom.historyList.scrollHeight;}
     function generateMaskPixelData(m){if(m.type==='ai')return new Uint8ClampedArray(m.maskData);if(m.type==='radial'){const{cx,cy,rx,ry}=m.params;const d=new Uint8ClampedArray(canvas.width*canvas.height);for(let y=0;y<canvas.height;y++){for(let x=0;x<canvas.width;x++){const i=y*canvas.width+x;const v=((x-cx)/rx)**2+((y-cy)/ry)**2;d[i]=v<1?(1-Math.sqrt(v))*255:0;}}return d;}return null;}
     function getCanvasCoords(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width*canvas.width,y:(e.clientY-r.top)/r.height*canvas.height};}
     function getCropHandleAt(x,y){const s=10/(canvas.getBoundingClientRect().width/canvas.width);const h={tl:{x:cropBox.x,y:cropBox.y},tr:{x:cropBox.x+cropBox.w,y:cropBox.y},bl:{x:cropBox.x,y:cropBox.y+cropBox.h},br:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h},t:{x:cropBox.x+cropBox.w/2,y:cropBox.y},b:{x:cropBox.x+cropBox.w/2,y:cropBox.y+cropBox.h},l:{x:cropBox.x,y:cropBox.y+cropBox.h/2},r:{x:cropBox.x+cropBox.w,y:cropBox.y+cropBox.h/2},};for(const[n,p]of Object.entries(h)){if(Math.hypot(x-p.x,y-p.y)<s)return n;}return null;}
@@ -212,5 +217,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // =================================================================================
     // 10. TONE CURVE CLASS (Self-Contained Module)
     // =================================================================================
-    class ToneCurve{constructor(containerId,onChange){this.container=document.getElementById(containerId);this.onChange=onChange;this.points=[{x:0,y:255},{x:255,y:0}];this.lut=null;this.draggingPoint=null;this.init();}init(){this.canvas=document.createElement('canvas');this.canvas.id='toneCurveCanvas';this.canvas.width=256;this.canvas.height=256;this.ctx=this.canvas.getContext('2d');const r=document.createElement('button');r.id='resetCurveButton';r.innerText='Reset';r.onclick=()=>{this.setPoints([{x:0,y:255},{x:255,y:0}]);this.onChange(true);};this.container.innerHTML='';this.container.appendChild(this.canvas);this.container.appendChild(r);this.canvas.addEventListener('mousedown',this.onMouseDown.bind(this));this.canvas.addEventListener('mousemove',this.onMouseMove.bind(this));this.canvas.addEventListener('mouseup',this.onMouseUp.bind(this));this.canvas.addEventListener('mouseleave',this.onMouseUp.bind(this));this.draw();this.generateLUT();}setPoints(p){this.points=JSON.parse(JSON.stringify(p)).sort((a,b)=>a.x-b.x);this.draw();this.generateLUT();}draw(){this.ctx.fillStyle='#2c2c2c';this.ctx.fillRect(0,0,256,256);this.ctx.strokeStyle='#444';this.ctx.lineWidth=0.5;this.ctx.beginPath();[64,128,192].forEach(p=>{this.ctx.moveTo(p,0);this.ctx.lineTo(p,256);this.ctx.moveTo(0,p);this.ctx.lineTo(256,p);});this.ctx.stroke();this.ctx.strokeStyle='#e0e0e0';this.ctx.lineWidth=2;this.ctx.beginPath();this.ctx.moveTo(this.points[0].x,this.points[0].y);for(let i=1;i<this.points.length;i++){this.ctx.lineTo(this.points[i].x,this.points[i].y);}this.ctx.stroke();this.ctx.fillStyle='#00aeff';this.points.forEach(p=>{this.ctx.beginPath();this.ctx.arc(p.x,p.y,4,0,2*Math.PI);this.ctx.fill();});}generateLUT(){this.lut=new Uint8ClampedArray(256);for(let i=0;i<256;i++){let p1_idx=0;while(p1_idx<this.points.length-2&&this.points[p1_idx+1].x<i){p1_idx++;}const p1=this.points[p1_idx];const p2=this.points[p1_idx+1];const t=(p1.x===p2.x)?0:(i-p1.x)/(p2.x-p1.x);const y=255-(p1.y+t*(p2.y-p1.y));this.lut[i]=Math.max(0,Math.min(255,y));}}onMouseDown(e){const x=e.offsetX;const y=e.offsetY;let f=null;for(const p of this.points){if(Math.hypot(p.x-x,p.y-y)<8){f=p;break;}}if(f&&e.ctrlKey&&this.points.length>2&&(f.x!==0&&f.x!==255)){this.points=this.points.filter(p=>p!==f);this.draggingPoint=null;this.draw();this.generateLUT();this.onChange(true);}else if(f){this.draggingPoint=f;}else{const nP={x,y};this.points.push(nP);this.points.sort((a,b)=>a.x-b.x);this.draggingPoint=nP;}this.draw();}onMouseMove(e){if(!this.draggingPoint)return;if(this.draggingPoint.x!==0&&this.draggingPoint.x!==255){this.draggingPoint.x=Math.max(1,Math.min(254,e.offsetX));}this.draggingPoint.y=Math.max(0,Math.min(255,e.offsetY));this.points.sort((a,b)=>a.x-b.x);this.draw();this.onChange(false);}onMouseUp(){if(this.draggingPoint){this.draggingPoint=null;this.generateLUT();this.onChange(true);}}}
+    class ToneCurve{constructor(containerId,onChange){this.container=document.getElementById(containerId);this.onChange=onChange;this.points=[{x:0,y:255},{x:255,y:0}];this.lut=null;this.draggingPoint=null;this.init();}
+    init(){this.canvas=document.createElement('canvas');this.canvas.id='toneCurveCanvas';this.canvas.width=256;this.canvas.height=256;this.ctx=this.canvas.getContext('2d');const r=document.createElement('button');r.id='resetCurveButton';r.innerText='Reset';r.onclick=()=>{this.setPoints([{x:0,y:255},{x:255,y:0}]);this.onChange(true);};this.container.innerHTML='';this.container.appendChild(this.canvas);this.container.appendChild(r);this.canvas.addEventListener('mousedown',this.onMouseDown.bind(this));this.canvas.addEventListener('mousemove',this.onMouseMove.bind(this));this.canvas.addEventListener('mouseup',this.onMouseUp.bind(this));this.canvas.addEventListener('mouseleave',this.onMouseUp.bind(this));this.draw();this.generateLUT();}
+    setPoints(p){this.points=JSON.parse(JSON.stringify(p)).sort((a,b)=>a.x-b.x);this.draw();this.generateLUT();}
+    draw(){this.ctx.fillStyle='#2c2c2c';this.ctx.fillRect(0,0,256,256);this.ctx.strokeStyle='#444';this.ctx.lineWidth=0.5;this.ctx.beginPath();[64,128,192].forEach(p=>{this.ctx.moveTo(p,0);this.ctx.lineTo(p,256);this.ctx.moveTo(0,p);this.ctx.lineTo(256,p);});this.ctx.stroke();this.ctx.strokeStyle='#e0e0e0';this.ctx.lineWidth=2;this.ctx.beginPath();this.ctx.moveTo(this.points[0].x,this.points[0].y);for(let i=1;i<this.points.length;i++){this.ctx.lineTo(this.points[i].x,this.points[i].y);}this.ctx.stroke();this.ctx.fillStyle='#00aeff';this.points.forEach(p=>{this.ctx.beginPath();this.ctx.arc(p.x,p.y,4,0,2*Math.PI);this.ctx.fill();});}
+    generateLUT(){this.lut=new Uint8ClampedArray(256);for(let i=0;i<256;i++){let p1_idx=0;while(p1_idx<this.points.length-2&&this.points[p1_idx+1].x<i){p1_idx++;}const p1=this.points[p1_idx];const p2=this.points[p1_idx+1];const t=(p1.x===p2.x)?0:(i-p1.x)/(p2.x-p1.x);const y=255-(p1.y+t*(p2.y-p1.y));this.lut[i]=Math.max(0,Math.min(255,y));}}
+    onMouseDown(e){const x=e.offsetX;const y=e.offsetY;let f=null;for(const p of this.points){if(Math.hypot(p.x-x,p.y-y)<8){f=p;break;}}if(f&&e.ctrlKey&&this.points.length>2&&(f.x!==0&&f.x!==255)){this.points=this.points.filter(p=>p!==f);this.draggingPoint=null;this.draw();this.generateLUT();this.onChange(true);}else if(f){this.draggingPoint=f;}else{const nP={x,y};this.points.push(nP);this.points.sort((a,b)=>a.x-b.x);this.draggingPoint=nP;}this.draw();}
+    onMouseMove(e){if(!this.draggingPoint)return;if(this.draggingPoint.x!==0&&this.draggingPoint.x!==255){this.draggingPoint.x=Math.max(1,Math.min(254,e.offsetX));}this.draggingPoint.y=Math.max(0,Math.min(255,e.offsetY));this.points.sort((a,b)=>a.x-b.x);this.draw();this.onChange(false);}
+    onMouseUp(){if(this.draggingPoint){this.draggingPoint=null;this.generateLUT();this.onChange(true);}}}
 });
